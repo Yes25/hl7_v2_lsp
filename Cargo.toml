@@ -1,0 +1,12 @@
+[package]
+name = "hl7_v2_lsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tower-lsp-server = "0.21.1"
+tokio = { version = "1.45.1", features = ["full"] }
+tree-sitter = "0.25.5"
+
+[build-dependencies]
+cc="*"
