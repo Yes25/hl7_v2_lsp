@@ -27,6 +27,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -49,6 +50,27 @@ impl LanguageServer for Backend {
         }))
     }
 
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let mut f = File::options().append(true).open(&self.log_path).unwrap();
+        writeln!(&mut f, "inlay_hint got called",).unwrap();
+
+        let _start = params.range.start;
+        let _end = params.range.end;
+        Ok(Some(vec![InlayHint {
+            position: Position {
+                line: 0,
+                character: 0,
+            },
+            label: InlayHintLabel::String(String::from("Hint Test")),
+            data: None,
+            kind: Some(InlayHintKind::TYPE),
+            padding_left: Some(false),
+            padding_right: Some(false),
+            text_edits: None,
+            tooltip: None,
+        }]))
+    }
+
     async fn did_open(&self, params: DidOpenTextDocumentParams) -> () {
         let text_doc = params.text_document.text;
         let length = text_doc.len();
@@ -62,7 +84,7 @@ impl LanguageServer for Backend {
             .expect("Error loading MyLang grammar");
 
         self.client
-            .show_message(MessageType::INFO, "successfully parsed message2")
+            .show_message(MessageType::INFO, "successfully parsed message")
             .await;
 
         let tree = parser.parse(&text_doc, None).unwrap();
@@ -73,11 +95,11 @@ impl LanguageServer for Backend {
             *ast = Some(tree);
         }
 
-        let ast = self.ast.read().await;
-        let ast_string = ast.as_ref().unwrap().root_node().to_sexp();
+        // let ast = self.ast.read().await;
+        // let ast_string = ast.as_ref().unwrap().root_node().to_sexp();
 
-        let mut f = File::options().append(true).open(&self.log_path).unwrap();
-        writeln!(&mut f, "{}", ast_string).unwrap();
+        // let mut f = File::options().append(true).open(&self.log_path).unwrap();
+        // writeln!(&mut f, "{}", ast_string).unwrap();
     }
 
     async fn shutdown(&self) -> Result<()> {
