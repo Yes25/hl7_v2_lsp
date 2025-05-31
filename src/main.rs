@@ -54,21 +54,13 @@ impl LanguageServer for Backend {
         let mut f = File::options().append(true).open(&self.log_path).unwrap();
         writeln!(&mut f, "inlay_hint got called",).unwrap();
 
-        let _start = params.range.start;
-        let _end = params.range.end;
-        Ok(Some(vec![InlayHint {
-            position: Position {
-                line: 0,
-                character: 0,
-            },
-            label: InlayHintLabel::String(String::from("Hint Test")),
-            data: None,
-            kind: Some(InlayHintKind::TYPE),
-            padding_left: Some(false),
-            padding_right: Some(false),
-            text_edits: None,
-            tooltip: None,
-        }]))
+        let parse_tree = self.ast.read().await;
+        if let Some(parse_tree) = parse_tree.as_ref() {
+            let inlay_hints = get_inlay_hints(parse_tree);
+            return Ok(Some(inlay_hints));
+        }
+
+        Ok(None)
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) -> () {
@@ -127,4 +119,35 @@ async fn main() {
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
+    let mut inlay_hints: Vec<InlayHint> = Vec::new();
+    let root_node = parse_tree.root_node();
+
+    for i in 0..root_node.child_count() {
+        if let Some(segment) = root_node.child(i) {
+            for j in 1..segment.child_count() {
+                if let Some(child) = segment.child(j) {
+                    let position = child.start_position();
+                    let row = position.row;
+                    let start = position.column;
+                    inlay_hints.push(InlayHint {
+                        position: Position {
+                            line: row as u32,
+                            character: start as u32,
+                        },
+                        label: InlayHintLabel::String(j.to_string() + ":"),
+                        data: None,
+                        kind: Some(InlayHintKind::TYPE),
+                        padding_left: Some(false),
+                        padding_right: Some(false),
+                        text_edits: None,
+                        tooltip: None,
+                    })
+                }
+            }
+        }
+    }
+    inlay_hints
 }
