@@ -132,10 +132,27 @@ fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
                 if segment.kind() == "msh" && field_count == 0 {
                     field_count += 1; // one additional for msh, because first field is actually the field spearator ("|")
                 }
-                if let Some(child) = segment.child(j) {
-                    if child.kind() == "field_separator" {
+                if let Some(field) = segment.child(j) {
+                    if field.kind() == "field_separator" {
                         field_count += 1;
-                        inlay_hints.push(build_inlay_hint_field(field_count, &child))
+                        let hint_label = format!("{field_count}:");
+                        inlay_hints.push(build_inlay_hint(hint_label, &field))
+                    }
+
+                    if field.kind() == "field" {
+                        if let Some(repeat) = field.child(0) {
+                            let mut component_count = 1;
+                            for k in 0..repeat.child_count() {
+                                if let Some(component) = repeat.child(k) {
+                                    if component.kind() == "component_separator" {
+                                        component_count += 1;
+                                        let hint_label =
+                                            format!("{field_count}.{component_count}:");
+                                        inlay_hints.push(build_inlay_hint(hint_label, &component))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -145,18 +162,17 @@ fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
     inlay_hints
 }
 
-fn build_inlay_hint_field(field_count: u32, child: &Node) -> InlayHint {
+fn build_inlay_hint(hint_label: String, child: &Node) -> InlayHint {
     let position = child.start_position();
     let row = position.row;
     let start = position.column;
-    let postion_str = field_count.to_string();
 
     InlayHint {
         position: Position {
             line: row as u32,
             character: start as u32 + 1,
         },
-        label: InlayHintLabel::String(format!("{postion_str}:")),
+        label: InlayHintLabel::String(hint_label),
         data: None,
         kind: Some(InlayHintKind::TYPE),
         padding_left: Some(false),
