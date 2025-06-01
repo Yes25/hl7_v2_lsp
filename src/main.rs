@@ -4,7 +4,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
-use tree_sitter::{Language, Parser, Tree};
+use tree_sitter::{Language, Node, Parser, Tree};
 
 use tokio::sync::RwLock;
 
@@ -120,34 +120,48 @@ async fn main() {
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
-
+// TODO: There is some kind of bug with chars like ` and ´ (zero width?)
 fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
     let mut inlay_hints: Vec<InlayHint> = Vec::new();
     let root_node = parse_tree.root_node();
 
     for i in 0..root_node.child_count() {
         if let Some(segment) = root_node.child(i) {
+            let mut field_count = 0;
             for j in 1..segment.child_count() {
+                if segment.kind() == "msh" && field_count == 0 {
+                    field_count += 1; // one additional for msh, because first field is actually the field spearator ("|")
+                }
                 if let Some(child) = segment.child(j) {
-                    let position = child.start_position();
-                    let row = position.row;
-                    let start = position.column;
-                    inlay_hints.push(InlayHint {
-                        position: Position {
-                            line: row as u32,
-                            character: start as u32,
-                        },
-                        label: InlayHintLabel::String(j.to_string() + ":"),
-                        data: None,
-                        kind: Some(InlayHintKind::TYPE),
-                        padding_left: Some(false),
-                        padding_right: Some(false),
-                        text_edits: None,
-                        tooltip: None,
-                    })
+                    if child.kind() == "field_separator" {
+                        field_count += 1;
+                        inlay_hints.push(build_inlay_hint_field(field_count, &child))
+                    }
                 }
             }
         }
     }
+
     inlay_hints
+}
+
+fn build_inlay_hint_field(field_count: u32, child: &Node) -> InlayHint {
+    let position = child.start_position();
+    let row = position.row;
+    let start = position.column;
+    let postion_str = field_count.to_string();
+
+    InlayHint {
+        position: Position {
+            line: row as u32,
+            character: start as u32 + 1,
+        },
+        label: InlayHintLabel::String(format!("{postion_str}:")),
+        data: None,
+        kind: Some(InlayHintKind::TYPE),
+        padding_left: Some(false),
+        padding_right: Some(false),
+        text_edits: None,
+        tooltip: None,
+    }
 }

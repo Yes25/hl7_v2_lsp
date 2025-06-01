@@ -22,6 +22,7 @@ module.exports = grammar({
     msh: ($) =>
       seq(
         "MSH",
+        $.field_separator,
         $.msh_controls,
         repeat(seq($.field_separator, optional($.field))), // Fields after MSH
         $.segment_separator,
@@ -29,7 +30,6 @@ module.exports = grammar({
 
     msh_controls: ($) =>
       seq(
-        $.field_separator,
         $.component_separator,
         $.repetition_separator,
         $.escape_character,

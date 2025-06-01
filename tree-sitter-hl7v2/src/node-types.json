@@ -101,10 +101,6 @@
           "named": true
         },
         {
-          "type": "field_separator",
-          "named": true
-        },
-        {
           "type": "repetition_separator",
           "named": true
         },
