@@ -4,7 +4,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
-use tree_sitter::{Language, Node, Parser, Tree};
+use tree_sitter::{Language, Node, Parser, Point, Tree};
 
 use tokio::sync::RwLock;
 
@@ -43,11 +43,45 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn hover(&self, _: HoverParams) -> Result<Option<Hover>> {
-        Ok(Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String("You're hovering!".to_string())),
-            range: None,
-        }))
+    // async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+    //     Ok(Some(Hover {
+    //         contents: HoverContents::Scalar(MarkedString::String("test".to_owned())),
+    //         range: None,
+    //     }))
+    // }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let mut f = File::options().append(true).open(&self.log_path).unwrap();
+
+        let position = params.text_document_position_params.position;
+
+        let hover_point = Point {
+            row: position.line as usize,
+            column: position.character as usize,
+        };
+        let hover_point_2 = Point {
+            row: position.line as usize + 1,
+            column: position.character as usize,
+        };
+
+        writeln!(&mut f, "before parse_tree read").unwrap();
+        let parse_tree = self.ast.read().await;
+        if let Some(parse_tree) = parse_tree.as_ref() {
+            writeln!(&mut f, "got parse_tree").unwrap();
+            if let Some(node) = parse_tree
+                .root_node()
+                .descendant_for_point_range(hover_point, hover_point_2)
+            {
+                let node_info = get_node_info(node);
+
+                writeln!(&mut f, "before inner return").unwrap();
+                return Ok(Some(Hover {
+                    contents: HoverContents::Scalar(MarkedString::String(node_info)),
+                    range: None,
+                }));
+            }
+        }
+        Ok(None)
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
@@ -214,4 +248,35 @@ fn build_inlay_hint(hint_label: String, child: &Node) -> InlayHint {
         text_edits: None,
         tooltip: None,
     }
+}
+
+fn get_node_info(node: Node) -> String {
+    let mut sub_component_idx = 0;
+    let mut component_idx = 0;
+    let mut field_idx = 0;
+
+    let mut tmp_node = node;
+    while let Some(parent) = tmp_node.parent() {
+        if parent.kind() == "subcomponent" {
+            sub_component_idx = count_prev_siblings(parent);
+        }
+        if parent.kind() == "component" {
+            component_idx = count_prev_siblings(parent);
+        }
+        if parent.kind() == "field" {
+            field_idx = count_prev_siblings(parent);
+        }
+        tmp_node = parent
+    }
+    format!("{field_idx}.{component_idx}.{sub_component_idx}")
+}
+
+fn count_prev_siblings(node: Node) -> u32 {
+    let mut tmp_node = node;
+    let mut sibling_count = 0;
+    while let Some(sibling) = tmp_node.prev_sibling() {
+        tmp_node = sibling;
+        sibling_count += 1
+    }
+    sibling_count
 }
