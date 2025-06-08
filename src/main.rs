@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::Write;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
@@ -14,16 +12,13 @@ unsafe extern "C" {
 
 struct Backend {
     client: Client,
-    log_path: String,
     language: Language,
     ast: RwLock<Option<Tree>>,
+    message_text: RwLock<Option<String>>,
 }
 
 impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
-        let mut f = File::options().append(true).open(&self.log_path).unwrap();
-        writeln!(&mut f, "Inititialize called").unwrap();
-
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -35,59 +30,39 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        let mut f = File::options().append(true).open(&self.log_path).unwrap();
-        writeln!(&mut f, "Initialized called").unwrap();
-
         self.client
             .log_message(MessageType::INFO, "server initialized!")
             .await;
     }
 
-    // async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-    //     Ok(Some(Hover {
-    //         contents: HoverContents::Scalar(MarkedString::String("test".to_owned())),
-    //         range: None,
-    //     }))
-    // }
-
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let mut f = File::options().append(true).open(&self.log_path).unwrap();
-
         let position = params.text_document_position_params.position;
 
         let hover_point = Point {
             row: position.line as usize,
             column: position.character as usize,
         };
-        let hover_point_2 = Point {
-            row: position.line as usize + 1,
-            column: position.character as usize,
-        };
 
-        writeln!(&mut f, "before parse_tree read").unwrap();
         let parse_tree = self.ast.read().await;
         if let Some(parse_tree) = parse_tree.as_ref() {
-            writeln!(&mut f, "got parse_tree").unwrap();
             if let Some(node) = parse_tree
                 .root_node()
-                .descendant_for_point_range(hover_point, hover_point_2)
+                .descendant_for_point_range(hover_point, hover_point)
             {
-                let node_info = get_node_info(node);
-
-                writeln!(&mut f, "before inner return").unwrap();
-                return Ok(Some(Hover {
-                    contents: HoverContents::Scalar(MarkedString::String(node_info)),
-                    range: None,
-                }));
+                let rwl_message_text = self.message_text.read().await;
+                if let Some(msg_text) = rwl_message_text.as_ref() {
+                    let node_info = get_node_info(node, msg_text);
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Scalar(MarkedString::String(node_info)),
+                        range: None,
+                    }));
+                }
             }
         }
         Ok(None)
     }
 
-    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
-        let mut f = File::options().append(true).open(&self.log_path).unwrap();
-        writeln!(&mut f, "inlay_hint got called",).unwrap();
-
+    async fn inlay_hint(&self, _params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let parse_tree = self.ast.read().await;
         if let Some(parse_tree) = parse_tree.as_ref() {
             let inlay_hints = get_inlay_hints(parse_tree);
@@ -120,12 +95,10 @@ impl LanguageServer for Backend {
             let mut ast = self.ast.write().await;
             *ast = Some(tree);
         }
-
-        // let ast = self.ast.read().await;
-        // let ast_string = ast.as_ref().unwrap().root_node().to_sexp();
-
-        // let mut f = File::options().append(true).open(&self.log_path).unwrap();
-        // writeln!(&mut f, "{}", ast_string).unwrap();
+        {
+            let mut msg = self.message_text.write().await;
+            *msg = Some(text_doc);
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -135,11 +108,6 @@ impl LanguageServer for Backend {
 
 #[tokio::main]
 async fn main() {
-    let log_path = "lsp_dbg_log.txt";
-    let mut output = File::create(&log_path).unwrap();
-    let line = "Created File";
-    writeln!(output, "{}", line).unwrap();
-
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
@@ -147,9 +115,9 @@ async fn main() {
 
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        log_path: String::from(log_path),
         language,
         ast: RwLock::new(None),
+        message_text: RwLock::new(None),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
@@ -158,10 +126,6 @@ async fn main() {
 fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
     let mut inlay_hints: Vec<InlayHint> = Vec::new();
     let root_node = parse_tree.root_node();
-
-    // TODO: Just for Dbg
-    let log_path = "lsp_dbg_log.txt";
-    let mut f = File::options().append(true).open(&log_path).unwrap();
 
     for i in 0..root_node.child_count() {
         if let Some(segment) = root_node.child(i) {
@@ -182,41 +146,6 @@ fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
                         }
                         inlay_hints.push(build_inlay_hint(hint_label, &field))
                     }
-
-                    // if field.kind() == "field" {
-                    //     if let Some(repeat) = field.child(0) {
-                    //         let mut component_count = 1;
-                    //         for k in 0..repeat.child_count() {
-                    //             if let Some(component) = repeat.child(k) {
-                    //                 component_count += 1;
-                    //                 // if component.kind() == "component_separator" {
-                    //                 //     component_count += 1;
-                    //                 //     let hint_label =
-                    //                 //         format!("{field_count}.{component_count}:");
-                    //                 //     inlay_hints.push(build_inlay_hint(hint_label, &component))
-                    //                 // }
-
-                    //                 if component.kind() == "component" {
-                    //                     writeln!(&mut f, "in component path",).unwrap();
-
-                    //                     let mut sub_component_count = 1;
-                    //                     for l in 0..component.child_count() {
-                    //                         if let Some(sub_component) = component.child(l) {
-                    //                             sub_component_count += 1;
-                    //                             let hint_label = format!(
-                    //                                 "{field_count}.{component_count}.{sub_component_count}:"
-                    //                             );
-                    //                             inlay_hints.push(build_inlay_hint(
-                    //                                 hint_label,
-                    //                                 &sub_component,
-                    //                             ))
-                    //                         }
-                    //                     }
-                    //                 }
-                    //             }
-                    //         }
-                    //     }
-                    // }
                 }
             }
         }
@@ -250,7 +179,29 @@ fn build_inlay_hint(hint_label: String, child: &Node) -> InlayHint {
     }
 }
 
-fn get_node_info(node: Node) -> String {
+fn get_node_info(node: Node, msg_text: &String) -> String {
+    let segment = get_node_segment(node, msg_text);
+    let node_numbers = get_node_numbers(node, &segment);
+
+    format!("{segment} - {node_numbers}")
+}
+
+fn get_node_segment(node: Node, msg_text: &String) -> String {
+    let mut tmp_node = node;
+    while let Some(parent) = tmp_node.parent() {
+        tmp_node = parent;
+        if parent.kind() == "segment" {
+            break;
+        }
+    }
+
+    let whole_segment = tmp_node.byte_range();
+    let reduced_range = whole_segment.start..(whole_segment.start + 3);
+    let segment = msg_text.get(reduced_range).unwrap();
+    segment.to_owned()
+}
+
+fn get_node_numbers(node: Node, segment: &str) -> String {
     let mut sub_component_idx = 0;
     let mut component_idx = 0;
     let mut field_idx = 0;
@@ -258,25 +209,60 @@ fn get_node_info(node: Node) -> String {
     let mut tmp_node = node;
     while let Some(parent) = tmp_node.parent() {
         if parent.kind() == "subcomponent" {
-            sub_component_idx = count_prev_siblings(parent);
+            sub_component_idx = count_prev_subcomponents(parent);
         }
         if parent.kind() == "component" {
-            component_idx = count_prev_siblings(parent);
+            component_idx = count_prev_components(parent);
         }
         if parent.kind() == "field" {
-            field_idx = count_prev_siblings(parent);
+            field_idx = count_prev_fields(parent);
         }
         tmp_node = parent
+    }
+    if segment == "MSH" {
+        field_idx += 1;
     }
     format!("{field_idx}.{component_idx}.{sub_component_idx}")
 }
 
-fn count_prev_siblings(node: Node) -> u32 {
+fn count_prev_fields(node: Node) -> u32 {
+    assert_eq!(node.kind(), "field");
+
     let mut tmp_node = node;
     let mut sibling_count = 0;
     while let Some(sibling) = tmp_node.prev_sibling() {
         tmp_node = sibling;
-        sibling_count += 1
+        if tmp_node.kind() == "field_separator" {
+            sibling_count += 1
+        }
+    }
+    sibling_count
+}
+
+fn count_prev_components(node: Node) -> u32 {
+    assert_eq!(node.kind(), "component");
+
+    let mut tmp_node = node;
+    let mut sibling_count = 1;
+    while let Some(sibling) = tmp_node.prev_sibling() {
+        tmp_node = sibling;
+        if tmp_node.kind() == "component_separator" {
+            sibling_count += 1
+        }
+    }
+    sibling_count
+}
+
+fn count_prev_subcomponents(node: Node) -> u32 {
+    assert_eq!(node.kind(), "subcomponent");
+
+    let mut tmp_node = node;
+    let mut sibling_count = 1;
+    while let Some(sibling) = tmp_node.prev_sibling() {
+        tmp_node = sibling;
+        if tmp_node.kind() == "subcomponent_separator" {
+            sibling_count += 1
+        }
     }
     sibling_count
 }
