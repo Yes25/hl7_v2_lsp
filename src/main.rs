@@ -1,3 +1,4 @@
+use std::fs;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::lsp_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
@@ -12,7 +13,7 @@ unsafe extern "C" {
 
 struct Backend {
     client: Client,
-    language: Language,
+    parser: RwLock<Parser>,
     ast: RwLock<Option<Tree>>,
     message_text: RwLock<Option<String>>,
 }
@@ -74,24 +75,35 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) -> () {
         let text_doc = params.text_document.text;
-        let length = text_doc.len();
-        let message = format!("Doc length = {length}");
+        self.parse(text_doc).await;
 
-        self.client.show_message(MessageType::INFO, message).await;
+        // self.client
+        //    .show_message(MessageType::INFO, "successfully parsed message")
+        //    .await;
+    }
 
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .expect("Error loading MyLang grammar");
+    // TODO: this seems not to get called correctly
+    async fn did_change(&self, params: DidChangeTextDocumentParams) -> () {
+        let path = params.text_document.uri.path();
+        let text_doc = fs::read_to_string(path.as_str()).unwrap();
+        self.parse(text_doc).await;
 
         self.client
-            .show_message(MessageType::INFO, "successfully parsed message")
+            .show_message(MessageType::INFO, "did change got called")
             .await;
+    }
 
-        let tree = parser.parse(&text_doc, None).unwrap();
-        // This needs to its own scope so that the RWLock is dropped and ast can be read again
-        // afterwards.
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl Backend {
+    async fn parse(&self, text_doc: String) {
         {
+            let mut parser = self.parser.write().await;
+            let tree = parser.parse(&text_doc, None).unwrap();
+
             let mut ast = self.ast.write().await;
             *ast = Some(tree);
         }
@@ -99,10 +111,6 @@ impl LanguageServer for Backend {
             let mut msg = self.message_text.write().await;
             *msg = Some(text_doc);
         }
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -112,16 +120,21 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let language = unsafe { tree_sitter_hl7v2() };
+    let mut parser = Parser::new();
+    parser
+        .set_language(&language)
+        .expect("Error loading hl7v2 grammar");
 
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        language,
+        parser: RwLock::new(parser),
         ast: RwLock::new(None),
         message_text: RwLock::new(None),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
 }
+
 // TODO: There is some kind of bug with chars like ` and ´ (zero width?)
 fn get_inlay_hints(parse_tree: &Tree) -> Vec<InlayHint> {
     let mut inlay_hints: Vec<InlayHint> = Vec::new();
