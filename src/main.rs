@@ -67,14 +67,15 @@ impl LanguageServer for Backend {
             }
             let rwl_message_text = self.message_text.read().await;
             if let Some(msg_text) = rwl_message_text.as_ref() {
-                let node_info = get_node_info(node, msg_text);
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: node_info,
-                    }),
-                    range: None,
-                }));
+                if let Some(node_info) = get_node_info(node, msg_text) {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: node_info,
+                        }),
+                        range: None,
+                    }));
+                }
             }
         }
         Ok(None)
@@ -106,31 +107,35 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn parse(&self, text_doc: String) {
-        {
+        let tree = {
             let mut parser = self.parser.write().await;
-            let tree = parser.parse(&text_doc, None).unwrap();
-
-            let mut ast = self.ast.write().await;
-            *ast = Some(tree);
-        }
-        {
-            let mut msg = self.message_text.write().await;
-            *msg = Some(text_doc);
+            parser.parse(&text_doc, None)
+        };
+        match tree {
+            Some(tree) => {
+                *self.ast.write().await = Some(tree);
+                *self.message_text.write().await = Some(text_doc);
+            }
+            None => {
+                self.client
+                    .log_message(MessageType::WARNING, "Failed to parse document")
+                    .await;
+            }
         }
     }
 }
 
-fn get_node_info<'a>(node: Node<'a>, msg_text: &str) -> String {
+fn get_node_info<'a>(node: Node<'a>, msg_text: &str) -> Option<String> {
     // Hovering over a segment name (e.g., "PID", "OBX")
     if node.kind() == "segment_name" {
         let seg = &msg_text[node.byte_range()];
         if let Some(doc) = lookup_segment_doc(seg) {
-            return doc;
+            return Some(doc);
         }
-        return seg.to_owned();
+        return Some(seg.to_owned());
     }
 
-    let segment = get_node_segment(node, msg_text);
+    let segment = get_node_segment(node, msg_text)?;
     let node_numbers = get_node_numbers(node, &segment);
     // get_node_numbers already applies the MSH +1 offset so we use it directly
     // Strip optional repeat bracket e.g. "11[2]" → "11" before parsing
@@ -142,9 +147,9 @@ fn get_node_info<'a>(node: Node<'a>, msg_text: &str) -> String {
     if let Some(idx) = field_idx
         && let Some(doc) = lookup_doc(&segment, idx)
     {
-        return format!("{segment} - {node_numbers}\n\n{doc}");
+        return Some(format!("{segment} - {node_numbers}\n\n{doc}"));
     }
-    format!("{segment}.{node_numbers}")
+    Some(format!("{segment}.{node_numbers}"))
 }
 
 #[tokio::main]
@@ -158,32 +163,11 @@ async fn main() {
         .set_language(&language)
         .expect("Error loading hl7v2 grammar");
 
-    let (service, socket) = LspService::new(|client| {
-        // Test lookup_doc at startup
-        if let Some(doc) = lookup_doc("PID", 5) {
-            let client2 = client.clone();
-            tokio::spawn(async move {
-                let _ = client2
-                    .log_message(
-                        MessageType::INFO,
-                        format!("Test lookup_doc('PID', 5): {doc}"),
-                    )
-                    .await;
-            });
-        } else {
-            let client2 = client.clone();
-            tokio::spawn(async move {
-                let _ = client2
-                    .log_message(MessageType::INFO, "Test lookup_doc('PID', 5): not found")
-                    .await;
-            });
-        }
-        Backend {
-            client,
-            parser: RwLock::new(parser),
-            ast: RwLock::new(None),
-            message_text: RwLock::new(None),
-        }
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        parser: RwLock::new(parser),
+        ast: RwLock::new(None),
+        message_text: RwLock::new(None),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
@@ -281,7 +265,7 @@ fn get_inlay_hints(message_text: &str) -> Vec<InlayHint> {
     hints
 }
 
-fn get_node_segment(node: Node, msg_text: &str) -> String {
+fn get_node_segment(node: Node, msg_text: &str) -> Option<String> {
     let mut tmp_node = node;
     while let Some(parent) = tmp_node.parent() {
         tmp_node = parent;
@@ -292,8 +276,7 @@ fn get_node_segment(node: Node, msg_text: &str) -> String {
 
     let whole_segment = tmp_node.byte_range();
     let reduced_range = whole_segment.start..(whole_segment.start + 3);
-    let segment = msg_text.get(reduced_range).unwrap();
-    segment.to_owned()
+    msg_text.get(reduced_range).map(|s| s.to_owned())
 }
 
 fn get_node_numbers(node: Node, segment: &str) -> String {
