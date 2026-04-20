@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -19,7 +19,7 @@ struct FieldDoc {
     description: String,
 }
 
-static DOCS: Lazy<Option<Documentation>> = Lazy::new(|| {
+static DOCS: LazyLock<Option<Documentation>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("documentation.json")).ok()
 });
 

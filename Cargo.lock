@@ -188,7 +188,6 @@ name = "hl7_v2_lsp"
 version = "0.1.0"
 dependencies = [
  "cc",
- "once_cell",
  "serde",
  "serde_json",
  "tokio",
